@@ -4,8 +4,9 @@ This file records the third-party projects directly referenced by this source tr
 
 ## torchao
 
-- Project: torchao
+- Project: PyTorch AO
 - Repository: https://github.com/pytorch/ao.git
+- Branch: release/0.18.0
 - Tag: v0.18.0
 - Baseline commit: 5f2baf9d575cf732362594c998c399902942531f
 - License: BSD-3-Clause

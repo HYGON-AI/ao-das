@@ -7,7 +7,8 @@
 ## Open Source Attribution
 This repository is based on [torchao](https://github.com/pytorch/ao.git) and contains some changes for HCU/ROCm environments. Torchao is derived from the upstream torchao project.
 
-- Direct upstream: [torchao](https://github.com/pytorch/ao.git)
+- Direct upstream: [PyTorch AO](https://github.com/pytorch/ao.git)
+- Upstream branch: release/0.18.0
 - Upstream tag: v0.18.0
 - Upstream baseline commit: 5f2baf9d575cf732362594c998c399902942531f
 - Third-party inventory: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
