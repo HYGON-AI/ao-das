@@ -1,4 +1,5 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) 2026 Hygon Information Technology Co., Ltd.
 # All rights reserved.
 #
 # This source code is licensed under the BSD 3-Clause license found in the
