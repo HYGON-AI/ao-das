@@ -205,7 +205,7 @@ class TestVLLMIntegration:
                 tensor_parallel_size=tp_size,
                 enforce_eager=not compile,
                 dtype="bfloat16",
-                num_gpu_blocks_override=128,
+                num_gpu_blocks_override=256,
             )
 
             # Test prompts

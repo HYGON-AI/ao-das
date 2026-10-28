@@ -15,6 +15,7 @@ import torch
 from torchao.float8.float8_utils import is_row_major, pad_tensor_for_matmul
 from torchao.float8.types import FP8Granularity
 from torchao.utils import (
+    is_HCU,
     is_MI300,
     is_MI350,
     is_sm_at_least_89,
@@ -298,6 +299,7 @@ def _check_hardware_support(
         assert torch.xpu.is_available() or (
             torch.cuda.is_available()
             and is_sm_at_least_89()
+            or is_HCU()
             or is_MI300()
             or is_MI350()
         ), (

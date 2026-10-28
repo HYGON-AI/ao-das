@@ -198,6 +198,29 @@ def detect_hipify_v2():
         print(e)
     return False
 
+def get_rocm_version():
+    rocm_version_header_path = os.path.join(os.getenv("ROCM_PATH"), "include", "rocm_version.h")    
+    vals = {}
+    keys = {
+        "ROCM_VERSION_MAJOR",
+        "ROCM_VERSION_MINOR",
+        "ROCM_VERSION_PATCH",
+    }
+
+    for line in Path(rocm_version_header_path).read_text(encoding="utf-8", errors="ignore").splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[0] == "#define" and parts[1] in keys:
+            vals[parts[1]] = int(parts[2])
+
+    missing = keys - vals.keys()
+    if missing:
+        raise RuntimeError(f"missing macros: {sorted(missing)}")
+
+    major, minor, patch = vals["ROCM_VERSION_MAJOR"], vals["ROCM_VERSION_MINOR"], vals["ROCM_VERSION_PATCH"]
+    return int(major) * 10000 + int(minor) * 100 + int(patch)
+
+if torch.version.hip and ROCM_HOME is not None:
+    ROCM_VERSION = get_rocm_version()
 
 class BuildOptions:
     def __init__(self):
@@ -547,7 +570,7 @@ def get_extensions():
 
     extra_link_args = []
     extra_compile_args = {
-        "cxx": maybe_cpython_limited_api + maybe_hipify_v2_flag,
+        "cxx": [f"-DROCM_VERSION={ROCM_VERSION}" if use_rocm else None],
         "nvcc": nvcc_args if use_cuda else rocm_args + maybe_hipify_v2_flag,
     }
 
@@ -895,9 +918,17 @@ class TorchAOBuildPy(build_py_orig):
 if use_cpp != "0":
     check_submodules()
 
+ROCM_PATH = os.getenv('ROCM_PATH', "/opt/dtk/")
+dtk_path = ROCM_PATH + '/.info/rocm_version'
+torch_version = "".join(torch.__version__.split("."))
+with open(dtk_path, 'r') as file:
+    content = file.read().strip()
+dtk_version = content.replace('.', '')
+hcu_version = version + f'+das.dtk' + dtk_version + f'.torch{torch_version}'
+
 setup(
     name="torchao",
-    version=version + version_suffix,
+    version=hcu_version,
     packages=find_packages(exclude=["benchmarks", "benchmarks.*"]),
     include_package_data=True,
     package_data={
@@ -914,7 +945,4 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/pytorch/ao",
     cmdclass={"build_ext": TorchAOBuildExt, "build_py": TorchAOBuildPy},
-    options={
-        "bdist_wheel": {"py_limited_api": "cp310"} if not is_freethreaded() else {}
-    },
 )

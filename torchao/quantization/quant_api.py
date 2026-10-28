@@ -80,6 +80,7 @@ from torchao.quantization.utils import (
     _quantization_type,
 )
 from torchao.utils import (
+    is_HCU,
     is_MI300,
     is_MI350,
     is_sm_at_least_89,
@@ -1331,7 +1332,7 @@ def _float8_dynamic_activation_float8_weight_transform(
 ):
     _maybe_warn_rowwise_fp8_cuda_12_9(config)
     if torch.cuda.is_available():
-        assert is_sm_at_least_89() or is_MI300() or is_MI350(), (
+        assert is_sm_at_least_89() or is_MI300() or is_MI350() or is_HCU(), (
             "Float8 dynamic activation quantization is only supported on CUDA>=8.9 and MI300+"
         )
     if config.set_inductor_config:

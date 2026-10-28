@@ -30,6 +30,7 @@ __all__ = [
     "TorchAOBaseTensor",
     "is_cuda_version_at_least",
     "is_MI300",
+    "is_HCU",
     "is_sm_at_least_89",
     "is_sm_at_least_90",
     "is_sm_at_least_100",
@@ -1104,6 +1105,14 @@ def fill_defaults(args, n, defaults_tail):
 def is_ROCM():
     return torch.cuda.is_available() and torch.version.hip is not None
 
+def is_HCU():
+    if is_ROCM():
+        mxArchName = ["gfx938"]
+        archName = torch.cuda.get_device_properties(0).gcnArchName
+        for arch in mxArchName:
+            if arch in archName:
+                return True
+    return False
 
 def is_MI300():
     if is_ROCM():
