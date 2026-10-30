@@ -28,6 +28,7 @@ from torchao.utils import (
     is_cuda_version_at_least,
     is_MI300,
     is_MI350,
+    is_HCU,
 )
 
 
@@ -1601,14 +1602,24 @@ def _raise_if_flydsl_unavailable(opname: str) -> None:
     if _mxfp8_flydsl_kernels_available:
         return
     missing = _missing_flydsl_runtime_packages()
-    if missing:
+    if is_HCU(): 
+        if missing:
+            raise NotImplementedError(
+                f"{opname} requires FlyDSL — missing package(s): {', '.join(missing)}. "
+                "Build FlyDSL and add its python_packages dir to PYTHONPATH."
+            )
         raise NotImplementedError(
-            f"{opname} requires FlyDSL — missing package(s): {', '.join(missing)}. "
-            "Build FlyDSL and add its python_packages dir to PYTHONPATH."
+            f"{opname} requires an HCU with the FlyDSL runtime."
         )
-    raise NotImplementedError(
-        f"{opname} requires an AMD GPU (MI300 or MI350) with the FlyDSL runtime."
-    )
+    else:
+        if missing:
+            raise NotImplementedError(
+                f"{opname} requires FlyDSL — missing package(s): {', '.join(missing)}. "
+                "Build FlyDSL and add its python_packages dir to PYTHONPATH."
+            )
+        raise NotImplementedError(
+            f"{opname} requires an AMD GPU (MI300 or MI350) with the FlyDSL runtime."
+        )
 
 
 def _check_flydsl_unsupported_params(

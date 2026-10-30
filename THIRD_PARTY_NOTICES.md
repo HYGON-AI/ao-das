@@ -18,6 +18,5 @@ The unmodified upstream README at the fixed baseline is retained in [README_ORIG
 ## cutlass
 - Project: cutlass
 - Repository: https://github.com/NVIDIA/cutlass.git
-- Tag: v0.18.0
 - Baseline commit: e51efbfe18fe4f4cbb66ab814c55bf4aa0185491
 - License: BSD-3-Clause
