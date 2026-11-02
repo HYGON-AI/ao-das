@@ -1,0 +1,202 @@
+name: TorchAO HCU CI
+
+on:
+  push:
+    branches: [v0.18.0-dev]
+  pull_request_target:
+    branches: [v0.18.0-dev]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ROCM_PATH: /opt/dtk
+  PYPI_URL: ${{ vars.PYPI_URL }}
+  TORCH_VERSION: 2.11.0
+  LOCAL_RUN_ROOT: /ci_public/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
+
+jobs:
+  authorize-pr:
+    name: Check PR Labels
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      authorized: ${{ steps.authorization.outputs.authorized }}
+    steps:
+      - name: Verify ready-hcu authorization
+        id: authorization
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const label = "ready-hcu";
+            const action = context.payload.action;
+            const pullRequest = context.payload.pull_request;
+            const labels = pullRequest.labels.map(item => item.name);
+            const resetActions = new Set(["opened", "reopened", "ready_for_review"]);
+            core.setOutput("authorized", "false");
+
+            if (resetActions.has(action)) {
+              if (labels.includes(label)) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name: label,
+                });
+              }
+              core.setFailed(`HCU CI is locked. Apply the ${label} label to run it.`);
+              return;
+            }
+
+            if (action === "synchronize") {
+              if (!labels.includes(label)) {
+                core.setFailed(`HCU CI is locked. Apply the ${label} label to run it.`);
+                return;
+              }
+              core.setOutput("authorized", "true");
+              return;
+            }
+
+            if (action !== "labeled" || context.payload.label?.name !== label) {
+              return;
+            }
+
+            const response = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            const permission = response.data.permission;
+            if (!new Set(["write", "maintain", "admin"]).has(permission)) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: label,
+              });
+              core.setFailed(`${context.actor} cannot authorize HCU CI.`);
+              return;
+            }
+
+            core.setOutput("authorized", "true");
+
+  build:
+    needs: authorize-pr
+    if: >-
+      ${{
+        always() &&
+        ((github.event_name == 'pull_request_target' &&
+          needs.authorize-pr.result == 'success' &&
+          needs.authorize-pr.outputs.authorized == 'true') ||
+         (github.event_name == 'push' &&
+          github.repository == 'HYGON-AI/ao-das') ||
+         github.event_name == 'workflow_dispatch')
+      }}
+    runs-on: bw1100
+    timeout-minutes: 180
+    container:
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+      options: >-
+        --device=/dev/kfd --device=/dev/dri
+        --volume=/opt/hyhal:/opt/hyhal:ro
+        --volume=/ci_public:/ci_public
+        --shm-size=80G --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+      - name: Merge PR into target branch
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "${PR_BASE_SHA}" "${PR_HEAD_SHA}"
+          git checkout --detach "${PR_BASE_SHA}"
+          git -c user.name=github-actions -c user.email=ci@github \
+            merge --no-ff --no-edit "${PR_HEAD_SHA}"
+      - name: Build wheel
+        run: bash .github/scripts/build-hcu-wheel.sh
+
+  test:
+    needs: build
+    if: github.event_name == 'pull_request_target'
+    runs-on: bw1100
+    timeout-minutes: 720
+    container:
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+      options: >-
+        --device=/dev/kfd --device=/dev/dri
+        --volume=/opt/hyhal:/opt/hyhal:ro
+        --volume=/ci_public:/ci_public
+        --shm-size=80G --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Merge PR into target branch
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "${PR_BASE_SHA}" "${PR_HEAD_SHA}"
+          git checkout --detach "${PR_BASE_SHA}"
+          git -c user.name=github-actions -c user.email=ci@github \
+            merge --no-ff --no-edit "${PR_HEAD_SHA}"
+      - name: Test wheel
+        run: bash .github/scripts/test-hcu.sh
+
+  publish:
+    needs: build
+    if: >-
+      ${{
+        github.event_name == 'push' &&
+        github.repository == 'HYGON-AI/ao-das' &&
+        github.ref == 'refs/heads/v0.18.0-dev'
+      }}
+    runs-on: bw1100
+    timeout-minutes: 60
+    container:
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+      options: --volume=/ci_public:/ci_public
+    env:
+      PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+      DTK_PKG_NAME: DTK-26.04-rc4-centos8-x86_64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Repair and upload wheel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          source .github/scripts/build-hcu-wheel.sh
+          pip_install CIUpload
+          dtk_version="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
+          CIUpload REPAIR \
+            --dtk_version "${dtk_version}" \
+            --torch_version "${TORCH_VERSION}" \
+            --git_commit "${GITHUB_SHA:0:6}" \
+            --outputdir "${LOCAL_RUN_ROOT}/output" \
+            -f "${LOCAL_RUN_ROOT}"/dist/*.whl
+          CIUpload NIGHTLY \
+            --devpi_url "${PYPI_URL}" \
+            --password "${PYPI_PASSWORD}" \
+            --dtk_pkg_name "${DTK_PKG_NAME}" \
+            --record \
+            --repo "${GITHUB_WORKSPACE}" \
+            -f "${LOCAL_RUN_ROOT}"/output/*.whl
