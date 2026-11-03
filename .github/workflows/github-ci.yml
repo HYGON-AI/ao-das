@@ -1,4 +1,5 @@
 name: TorchAO HCU CI
+run-name: "TorchAO HCU CI - ${{ github.event_name }} - ${{ github.event.pull_request.number || github.ref_name }}"
 
 on:
   push:
@@ -22,6 +23,7 @@ env:
   PYPI_URL: ${{ vars.PYPI_URL }}
   TORCH_VERSION: 2.11.0
   LOCAL_RUN_ROOT: /ci_public/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
+  HCU_IMAGE: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
 
 jobs:
   authorize-pr:
@@ -105,13 +107,6 @@ jobs:
       }}
     runs-on: bw1100
     timeout-minutes: 180
-    container:
-      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
-      options: >-
-        --device=/dev/kfd --device=/dev/dri
-        --volume=/opt/hyhal:/opt/hyhal:ro
-        --volume=/ci_public:/ci_public
-        --shm-size=80G --privileged
     steps:
       - uses: actions/checkout@v4
         with:
@@ -129,20 +124,21 @@ jobs:
           git -c user.name=github-actions -c user.email=ci@github \
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
       - name: Build wheel
-        run: bash .github/scripts/build-hcu-wheel.sh
+        run: |
+          docker pull "${HCU_IMAGE}"
+          docker run --rm --privileged --shm-size=80G \
+            --device=/dev/kfd --device=/dev/dri \
+            --volume=/opt/hyhal:/opt/hyhal:ro \
+            --volume=/ci_public:/ci_public \
+            --volume="${GITHUB_WORKSPACE}:/workspace" --workdir=/workspace \
+            --env LOCAL_RUN_ROOT --env PYPI_URL --env TORCH_VERSION \
+            "${HCU_IMAGE}" bash .github/scripts/build-hcu-wheel.sh
 
   test:
     needs: build
     if: github.event_name == 'pull_request_target'
     runs-on: bw1100
     timeout-minutes: 720
-    container:
-      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
-      options: >-
-        --device=/dev/kfd --device=/dev/dri
-        --volume=/opt/hyhal:/opt/hyhal:ro
-        --volume=/ci_public:/ci_public
-        --shm-size=80G --privileged
     steps:
       - uses: actions/checkout@v4
         with:
@@ -158,7 +154,15 @@ jobs:
           git -c user.name=github-actions -c user.email=ci@github \
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
       - name: Test wheel
-        run: bash .github/scripts/test-hcu.sh
+        run: |
+          docker pull "${HCU_IMAGE}"
+          docker run --rm --privileged --shm-size=80G \
+            --device=/dev/kfd --device=/dev/dri \
+            --volume=/opt/hyhal:/opt/hyhal:ro \
+            --volume=/ci_public:/ci_public \
+            --volume="${GITHUB_WORKSPACE}:/workspace" --workdir=/workspace \
+            --env LOCAL_RUN_ROOT --env PYPI_URL --env TORCH_VERSION \
+            "${HCU_IMAGE}" bash .github/scripts/test-hcu.sh
 
   publish:
     needs: build
@@ -170,9 +174,6 @@ jobs:
       }}
     runs-on: bw1100
     timeout-minutes: 60
-    container:
-      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
-      options: --volume=/ci_public:/ci_public
     env:
       PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
       DTK_PKG_NAME: DTK-26.04-rc4-centos8-x86_64.tar.gz
@@ -184,19 +185,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          source .github/scripts/build-hcu-wheel.sh
-          pip_install CIUpload
-          dtk_version="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
-          CIUpload REPAIR \
-            --dtk_version "${dtk_version}" \
-            --torch_version "${TORCH_VERSION}" \
-            --git_commit "${GITHUB_SHA:0:6}" \
-            --outputdir "${LOCAL_RUN_ROOT}/output" \
-            -f "${LOCAL_RUN_ROOT}"/dist/*.whl
-          CIUpload NIGHTLY \
-            --devpi_url "${PYPI_URL}" \
-            --password "${PYPI_PASSWORD}" \
-            --dtk_pkg_name "${DTK_PKG_NAME}" \
-            --record \
-            --repo "${GITHUB_WORKSPACE}" \
-            -f "${LOCAL_RUN_ROOT}"/output/*.whl
+          docker pull "${HCU_IMAGE}"
+          docker run --rm \
+            --volume=/ci_public:/ci_public \
+            --volume="${GITHUB_WORKSPACE}:/workspace" --workdir=/workspace \
+            --env LOCAL_RUN_ROOT --env PYPI_URL --env PYPI_PASSWORD \
+            --env TORCH_VERSION --env DTK_PKG_NAME --env GITHUB_SHA \
+            "${HCU_IMAGE}" bash -c '
+              source .github/scripts/build-hcu-wheel.sh
+              pip_install CIUpload
+              dtk_version="$(tr -d ".[:space:]" < /opt/dtk/.info/rocm_version)"
+              CIUpload REPAIR \
+                --dtk_version "${dtk_version}" \
+                --torch_version "${TORCH_VERSION}" \
+                --git_commit "${GITHUB_SHA:0:6}" \
+                --outputdir "${LOCAL_RUN_ROOT}/output" \
+                -f "${LOCAL_RUN_ROOT}"/dist/*.whl
+              CIUpload NIGHTLY \
+                --devpi_url "${PYPI_URL}" \
+                --password "${PYPI_PASSWORD}" \
+                --dtk_pkg_name "${DTK_PKG_NAME}" \
+                --record --repo /workspace \
+                -f "${LOCAL_RUN_ROOT}"/output/*.whl
+            '
