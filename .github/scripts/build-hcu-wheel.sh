@@ -15,7 +15,7 @@ prepare_hcu() {
   local work_dir hipblaslt_dir hipblaslt_lib
   work_dir="$(mktemp -d)"
   curl -fL -C - -o "${work_dir}/hipblastLlib.tar.gz" \
-    "https://ksefile.hpccube.com:65241/efile/s/d/c2NubXFneDI4ZQ==-/06d7d4df13daa892"
+    "https://ksefile.hpccube.com:65241/efile/s/d/c2NubXFneDI4ZQ==/06d7d4df13daa892"
   tar -xzf "${work_dir}/hipblastLlib.tar.gz" -C "${work_dir}"
   hipblaslt_dir="$(find "${work_dir}" -type d -name hipblaslt -print -quit)"
   hipblaslt_lib="$(find "${work_dir}" -name libhipblaslt.so.0.10 -print -quit)"
