@@ -2,8 +2,22 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/build-hcu-wheel.sh"
+
+install_aicc() (
+  : "${RESOURCE_SERVER_URL:?RESOURCE_SERVER_URL repository variable is required}"
+  local installer
+  installer="$(mktemp)"
+  trap 'rm -f -- "${installer}"' EXIT
+  wget --quiet --tries=3 --timeout=120 \
+    --output-document="${installer}" -- \
+    "${RESOURCE_SERVER_URL%/}/ai_cc/Nightly/hcu_llvm_installer.sh"
+  bash "${installer}" --major 1.0.0 --dtk-dir /opt/dtk
+  test -x /opt/dtk/bin/aicc
+)
+
+install_aicc
 pip_install "torch==${TORCH_VERSION}" openai==2.25.0 \
-  aiter torchvision vllm vllm-hcu lightop triton aicc pytest
+  aiter torchvision vllm vllm-hcu lightop triton pytest
 prepare_hcu
 : "${LOCAL_RUN_ROOT:?LOCAL_RUN_ROOT is required}"
 python -m pip install --no-deps --force-reinstall \
