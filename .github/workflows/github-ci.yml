@@ -1,5 +1,5 @@
 name: TorchAO HCU CI
-run-name: "TorchAO HCU CI - ${{ github.event_name }} - ${{ github.event.pull_request.number || github.ref_name }}"
+run-name: "TorchAO HCU CI - ${{ github.event_name }} - ${{ github.event.pull_request.number || github.ref_name }} - attempt ${{ github.run_attempt }}"
 
 on:
   push:
@@ -21,9 +21,9 @@ concurrency:
 env:
   ROCM_PATH: /opt/dtk
   PYPI_URL: ${{ vars.PYPI_URL }}
+  RESOURCE_SERVER_URL: ${{ vars.RESOURCE_SERVER_URL }}
   TORCH_VERSION: 2.11.0
-  LOCAL_RUN_ROOT: /ci_public/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
-  HCU_IMAGE: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+  LOCAL_RUN_ROOT: /tmp/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
 
 jobs:
   authorize-pr:
@@ -94,7 +94,7 @@ jobs:
             core.setOutput("authorized", "true");
 
   build:
-    name: Build HCU wheel
+    name: Build, test, and publish HCU wheel
     needs: authorize-pr
     if: >-
       ${{
@@ -106,8 +106,15 @@ jobs:
           github.repository == 'HYGON-AI/ao-das') ||
          github.event_name == 'workflow_dispatch')
       }}
-    runs-on: [bw1100, nmz2]
-    timeout-minutes: 180
+    runs-on: bw1100
+    timeout-minutes: 720
+    container:
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+      volumes:
+        - /opt/hyhal:/opt/hyhal:ro
+      options: >-
+        --device=/dev/kfd --device=/dev/dri
+        --group-add=video --shm-size=80G --privileged
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,132 +125,42 @@ jobs:
       - name: Merge PR into target branch
         if: github.event_name == 'pull_request_target'
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags origin "${PR_BASE_SHA}" "${PR_HEAD_SHA}"
-          git checkout --detach "${PR_BASE_SHA}"
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth}" \
+            fetch --no-tags origin "pull/${PR_NUMBER}/head"
+          test "$(git rev-parse FETCH_HEAD)" = "${PR_HEAD_SHA}"
           git -c user.name=github-actions -c user.email=ci@github \
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
       - name: Build wheel
-        run: |
-          container_name="ao-das-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker rm -f "${container_name}" >/dev/null 2>&1 || true
-          trap 'docker rm -f "${container_name}" >/dev/null 2>&1 || true' EXIT
-          mkdir -p "${LOCAL_RUN_ROOT}/dist"
-          docker pull "${HCU_IMAGE}"
-          docker run --detach --name "${container_name}" \
-            --device=/dev/kfd --device=/dev/dri \
-            --group-add=video --shm-size=80G \
-            --volume=/opt/hyhal:/opt/hyhal:ro \
-            "${HCU_IMAGE}" tail -f /dev/null
-          docker cp "${GITHUB_WORKSPACE}/." "${container_name}:/workspace"
-          docker exec --workdir=/workspace \
-            --env LOCAL_RUN_ROOT=/tmp/ao-das-run \
-            --env PYPI_URL --env TORCH_VERSION \
-            "${container_name}" bash .github/scripts/build-hcu-wheel.sh
-          docker cp "${container_name}:/tmp/ao-das-run/dist/." \
-            "${LOCAL_RUN_ROOT}/dist/"
-
-  test:
-    name: Test HCU wheel
-    needs: build
-    if: github.event_name == 'pull_request_target'
-    runs-on: [bw1100, nmz2]
-    timeout-minutes: 720
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.base.sha }}
-      - name: Merge PR into target branch
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git fetch --no-tags origin "${PR_BASE_SHA}" "${PR_HEAD_SHA}"
-          git checkout --detach "${PR_BASE_SHA}"
-          git -c user.name=github-actions -c user.email=ci@github \
-            merge --no-ff --no-edit "${PR_HEAD_SHA}"
+        run: bash .github/scripts/build-hcu-wheel.sh
       - name: Test wheel
-        run: |
-          container_name="ao-das-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker rm -f "${container_name}" >/dev/null 2>&1 || true
-          trap 'docker rm -f "${container_name}" >/dev/null 2>&1 || true' EXIT
-          mapfile -t wheels < <(find "${LOCAL_RUN_ROOT}/dist" -maxdepth 1 \
-            -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          docker pull "${HCU_IMAGE}"
-          docker run --detach --name "${container_name}" \
-            --device=/dev/kfd --device=/dev/dri \
-            --group-add=video --shm-size=80G \
-            --volume=/opt/hyhal:/opt/hyhal:ro \
-            "${HCU_IMAGE}" tail -f /dev/null
-          docker cp "${GITHUB_WORKSPACE}/." "${container_name}:/workspace"
-          docker exec "${container_name}" mkdir -p /tmp/ao-das-run/dist
-          docker cp "${wheels[0]}" "${container_name}:/tmp/ao-das-run/dist/"
-          docker exec --workdir=/workspace \
-            --env LOCAL_RUN_ROOT=/tmp/ao-das-run \
-            --env PYPI_URL --env TORCH_VERSION \
-            "${container_name}" bash .github/scripts/test-hcu.sh
-
-  publish:
-    name: Publish HCU wheel
-    needs: build
-    if: >-
-      ${{
-        github.event_name == 'push' &&
-        github.repository == 'HYGON-AI/ao-das' &&
-        github.ref == 'refs/heads/v0.18.0-dev'
-      }}
-    runs-on: [bw1100, nmz2]
-    timeout-minutes: 60
-    env:
-      PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-      DTK_PKG_NAME: DTK-26.04-rc4-centos8-x86_64.tar.gz
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+        if: github.event_name == 'pull_request_target'
+        run: bash .github/scripts/test-hcu.sh
       - name: Repair and upload wheel
+        if: >-
+          github.event_name == 'push' &&
+          github.repository == 'HYGON-AI/ao-das' &&
+          github.ref == 'refs/heads/v0.18.0-dev'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          DTK_PKG_NAME: DTK-26.04-rc4-centos8-x86_64.tar.gz
         run: |
-          container_name="ao-das-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker rm -f "${container_name}" >/dev/null 2>&1 || true
-          trap 'docker rm -f "${container_name}" >/dev/null 2>&1 || true' EXIT
-          mapfile -t wheels < <(find "${LOCAL_RUN_ROOT}/dist" -maxdepth 1 \
-            -type f -name '*.whl' -print)
-          test "${#wheels[@]}" -eq 1
-          mkdir -p "${LOCAL_RUN_ROOT}/output"
-          docker pull "${HCU_IMAGE}"
-          docker run --detach --name "${container_name}" \
-            "${HCU_IMAGE}" tail -f /dev/null
-          docker cp "${GITHUB_WORKSPACE}/." "${container_name}:/workspace"
-          docker exec "${container_name}" mkdir -p /tmp/ao-das-run/dist
-          docker cp "${wheels[0]}" "${container_name}:/tmp/ao-das-run/dist/"
-          docker exec --workdir=/workspace \
-            --env LOCAL_RUN_ROOT=/tmp/ao-das-run \
-            --env PYPI_URL --env PYPI_PASSWORD \
-            --env TORCH_VERSION --env DTK_PKG_NAME --env GITHUB_SHA \
-            "${container_name}" bash -c '
-              source .github/scripts/build-hcu-wheel.sh
-              pip_install CIUpload
-              dtk_version="$(tr -d ".[:space:]" < /opt/dtk/.info/rocm_version)"
-              CIUpload REPAIR \
-                --dtk_version "${dtk_version}" \
-                --torch_version "${TORCH_VERSION}" \
-                --git_commit "${GITHUB_SHA:0:6}" \
-                --outputdir "${LOCAL_RUN_ROOT}/output" \
-                -f "${LOCAL_RUN_ROOT}"/dist/*.whl
-              CIUpload NIGHTLY \
-                --devpi_url "${PYPI_URL}" \
-                --password "${PYPI_PASSWORD}" \
-                --dtk_pkg_name "${DTK_PKG_NAME}" \
-                --record --repo /workspace \
-                -f "${LOCAL_RUN_ROOT}"/output/*.whl
-            '
-          docker cp "${container_name}:/tmp/ao-das-run/output/." \
-            "${LOCAL_RUN_ROOT}/output/"
+          source .github/scripts/build-hcu-wheel.sh
+          pip_install CIUpload
+          dtk_version="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
+          CIUpload REPAIR \
+            --dtk_version "${dtk_version}" \
+            --torch_version "${TORCH_VERSION}" \
+            --git_commit "${GITHUB_SHA:0:6}" \
+            --outputdir "${LOCAL_RUN_ROOT}/output" \
+            -f "${LOCAL_RUN_ROOT}"/dist/*.whl
+          CIUpload NIGHTLY \
+            --devpi_url "${PYPI_URL}" \
+            --password "${PYPI_PASSWORD}" \
+            --dtk_pkg_name "${DTK_PKG_NAME}" \
+            --record --repo "${GITHUB_WORKSPACE}" \
+            -f "${LOCAL_RUN_ROOT}"/output/*.whl
