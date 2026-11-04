@@ -14,10 +14,6 @@ permissions:
   pull-requests: read
   checks: read
 
-concurrency:
-  group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
   ROCM_PATH: /opt/dtk
   PYPI_URL: ${{ vars.PYPI_URL }}
@@ -32,7 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     outputs:
       authorized: ${{ steps.authorization.outputs.authorized }}
     steps:
@@ -49,24 +44,16 @@ jobs:
             core.setOutput("authorized", "false");
 
             if (resetActions.has(action)) {
-              if (labels.includes(label)) {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: pullRequest.number,
-                  name: label,
-                });
-              }
-              core.setFailed(`HCU CI is locked. Apply the ${label} label to run it.`);
+              core.notice(`HCU CI is locked. Apply the ${label} label to run it.`);
               return;
             }
 
             if (action === "synchronize") {
-              if (!labels.includes(label)) {
-                core.setFailed(`HCU CI is locked. Apply the ${label} label to run it.`);
-                return;
+              if (labels.includes(label)) {
+                core.setOutput("authorized", "true");
+              } else {
+                core.notice(`HCU CI is locked. Apply the ${label} label to run it.`);
               }
-              core.setOutput("authorized", "true");
               return;
             }
 
@@ -81,12 +68,6 @@ jobs:
             });
             const permission = response.data.permission;
             if (!new Set(["write", "maintain", "admin"]).has(permission)) {
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullRequest.number,
-                name: label,
-              });
               core.setFailed(`${context.actor} cannot authorize HCU CI.`);
               return;
             }
@@ -108,6 +89,9 @@ jobs:
       }}
     runs-on: bw1100
     timeout-minutes: 720
+    concurrency:
+      group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     container:
       image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
       volumes:
@@ -116,9 +100,9 @@ jobs:
         --device=/dev/kfd --device=/dev/dri
         --group-add=video --shm-size=80G --privileged
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
@@ -135,6 +119,12 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "${PR_HEAD_SHA}"
           git -c user.name=github-actions -c user.email=ci@github \
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
+      - name: Initialize submodules
+        run: |
+          git config --global --add safe.directory \
+            "${GITHUB_WORKSPACE}/third_party/cutlass"
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
       - name: Build wheel
         run: bash .github/scripts/build-hcu-wheel.sh
       - name: Test wheel
