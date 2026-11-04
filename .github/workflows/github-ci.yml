@@ -121,6 +121,7 @@ jobs:
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
       - name: Initialize submodules
         run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           git config --global --add safe.directory \
             "${GITHUB_WORKSPACE}/third_party/cutlass"
           git submodule sync --recursive
