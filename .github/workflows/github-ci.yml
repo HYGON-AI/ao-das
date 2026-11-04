@@ -14,6 +14,10 @@ permissions:
   pull-requests: read
   checks: read
 
+defaults:
+  run:
+    shell: bash
+
 env:
   ROCM_PATH: /opt/dtk
   PYPI_URL: ${{ vars.PYPI_URL }}
@@ -106,6 +110,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+      - name: Configure Git safe directories
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory \
+            "${GITHUB_WORKSPACE}/third_party/cutlass"
       - name: Merge PR into target branch
         if: github.event_name == 'pull_request_target'
         env:
@@ -121,9 +130,6 @@ jobs:
             merge --no-ff --no-edit "${PR_HEAD_SHA}"
       - name: Initialize submodules
         run: |
-          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          git config --global --add safe.directory \
-            "${GITHUB_WORKSPACE}/third_party/cutlass"
           git submodule sync --recursive
           git submodule update --init --force --recursive
       - name: Build wheel
