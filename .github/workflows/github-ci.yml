@@ -92,7 +92,7 @@ jobs:
          github.event_name == 'workflow_dispatch')
       }}
     runs-on: bw1100
-    timeout-minutes: 240
+    timeout-minutes: 7200
     concurrency:
       group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true

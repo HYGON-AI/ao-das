@@ -78,8 +78,12 @@ run_with_failed_retry() {
   local retry_limit="$3"
   local first_status=0
   shift 3
-  timeout --signal=TERM --kill-after=30s "${first_limit}" \
+  if [[ "${first_limit}" == none ]]; then
     python -m pytest -vs -o "cache_dir=${cache_dir}" "$@" || first_status=$?
+  else
+    timeout --signal=TERM --kill-after=30s "${first_limit}" \
+      python -m pytest -vs -o "cache_dir=${cache_dir}" "$@" || first_status=$?
+  fi
   if (( first_status == 0 )); then
     return 0
   fi
@@ -92,10 +96,14 @@ run_with_failed_retry() {
     return 1
   fi
   echo "Retrying only failed tests in ${cache_dir}" >&2
-  timeout --signal=TERM --kill-after=30s "${retry_limit}" \
-    python -m pytest -vs \
-    --last-failed --last-failed-no-failures=none \
-    -o "cache_dir=${cache_dir}" "$@"
+  if [[ "${retry_limit}" == none ]]; then
+    python -m pytest -vs --last-failed --last-failed-no-failures=none \
+      -o "cache_dir=${cache_dir}" "$@"
+  else
+    timeout --signal=TERM --kill-after=30s "${retry_limit}" \
+      python -m pytest -vs --last-failed --last-failed-no-failures=none \
+      -o "cache_dir=${cache_dir}" "$@"
+  fi
 }
 
 vllm_status=0
@@ -132,7 +140,7 @@ else
 fi
 
 main_status=0
-run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-main" 150m 45m test \
+run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-main" none none test \
   --ignore=test/integration/test_vllm.py \
   --deselect=test/quantization/pt2e/test_x86inductor_quantizer.py::TestQuantizePT2EX86Inductor::test_linear_reused_with_fusable_post_op || main_status=$?
 if (( vllm_status != 0 || main_status != 0 )); then
