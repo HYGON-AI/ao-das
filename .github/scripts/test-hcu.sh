@@ -72,34 +72,34 @@ source /opt/dtk/env.sh
 mv torchao/__init__.py torchao/__init__.py.bak
 trap 'mv torchao/__init__.py.bak torchao/__init__.py' EXIT
 
-cat > "${LOCAL_RUN_ROOT}/hcu_vllm_first.py" <<'PY'
-def pytest_collection_modifyitems(items):
-    items.sort(
-        key=lambda item: not item.nodeid.startswith("test/integration/test_vllm.py::")
-    )
-PY
-export PYTHONPATH="${LOCAL_RUN_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-
 run_with_failed_retry() {
   local cache_dir="$1"
-  shift
-  if timeout --signal=TERM --kill-after=30s 150m \
-    python -m pytest -p hcu_vllm_first -vs \
-    -o "cache_dir=${cache_dir}" "$@"; then
+  local first_limit="$2"
+  local retry_limit="$3"
+  local first_status=0
+  shift 3
+  timeout --signal=TERM --kill-after=30s "${first_limit}" \
+    python -m pytest -vs -o "cache_dir=${cache_dir}" "$@" || first_status=$?
+  if (( first_status == 0 )); then
     return 0
+  fi
+  if (( first_status == 124 || first_status == 137 )); then
+    echo "pytest exceeded ${first_limit}; skipping retry after forced termination" >&2
+    return "${first_status}"
   fi
   if ! grep -q '"' "${cache_dir}/v/cache/lastfailed" 2>/dev/null; then
     echo "pytest stopped before recording failed tests; no targeted retry is possible" >&2
     return 1
   fi
   echo "Retrying only failed tests in ${cache_dir}" >&2
-  timeout --signal=TERM --kill-after=30s 45m \
-    python -m pytest -p hcu_vllm_first -vs \
+  timeout --signal=TERM --kill-after=30s "${retry_limit}" \
+    python -m pytest -vs \
     --last-failed --last-failed-no-failures=none \
     -o "cache_dir=${cache_dir}" "$@"
 }
 
-idle_devices="$(python - <<'PY'
+vllm_status=0
+if idle_devices="$(python - <<'PY'
 import os
 import sys
 import torch
@@ -118,9 +118,24 @@ available = available[offset:] + available[:offset]
 available.sort(key=lambda item: item[1], reverse=True)
 print(",".join(str(device) for device, _ in available[:2]))
 PY
-)"
-export ROCR_VISIBLE_DEVICES="${idle_devices}"
-export VLLM_WORKER_MULTIPROC_METHOD=spawn
-echo "Running tests on HCU devices ${idle_devices}"
-run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest" test \
-  --deselect=test/quantization/pt2e/test_x86inductor_quantizer.py::TestQuantizePT2EX86Inductor::test_linear_reused_with_fusable_post_op
+)"; then
+  (
+    export ROCR_VISIBLE_DEVICES="${idle_devices}"
+    export VLLM_WORKER_MULTIPROC_METHOD=spawn
+    echo "Running vLLM tests on HCU devices ${idle_devices}"
+    run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-vllm" 20m 10m \
+      test/integration/test_vllm.py
+  ) || vllm_status=$?
+else
+  echo "Unable to select two idle HCU devices; running other tests" >&2
+  vllm_status=1
+fi
+
+main_status=0
+run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-main" 150m 45m test \
+  --ignore=test/integration/test_vllm.py \
+  --deselect=test/quantization/pt2e/test_x86inductor_quantizer.py::TestQuantizePT2EX86Inductor::test_linear_reused_with_fusable_post_op || main_status=$?
+if (( vllm_status != 0 || main_status != 0 )); then
+  echo "vLLM status: ${vllm_status}; other tests status: ${main_status}" >&2
+  exit 1
+fi
