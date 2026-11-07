@@ -62,7 +62,8 @@ PY
 )
 test "${#component_wheels[@]}" -eq 4
 pip_install "torch==${TORCH_VERSION}" openai==2.25.0 \
-  "${component_wheels[@]}" pytest expecttest parameterized fire tabulate
+  "${component_wheels[@]}" transformers==5.20.2 safetensors==0.8.0 \
+  pytest expecttest parameterized fire tabulate
 prepare_hcu
 : "${LOCAL_RUN_ROOT:?LOCAL_RUN_ROOT is required}"
 python -m pip install --no-deps --force-reinstall \
