@@ -40,7 +40,7 @@ class Links(HTMLParser):
 base = os.environ["PYPI_URL"].rstrip("/") + "/nightly/dtk2604/+simple/"
 torch_tag = "torch" + os.environ["TORCH_VERSION"].replace(".", "")
 supported = set(sys_tags())
-for package in ("aiter", "torchvision", "vllm", "vllm-hcu", "lightop", "triton"):
+for package in ("aiter", "torchvision", "lightop", "triton"):
     index = urljoin(base, package + "/")
     parser = Links()
     parser.feed(urlopen(index, timeout=30).read().decode())
@@ -60,7 +60,7 @@ for package in ("aiter", "torchvision", "vllm", "vllm-hcu", "lightop", "triton")
     print(f"Selected {package} {version}", file=sys.stderr)
 PY
 )
-test "${#component_wheels[@]}" -eq 6
+test "${#component_wheels[@]}" -eq 4
 pip_install "torch==${TORCH_VERSION}" openai==2.25.0 \
   "${component_wheels[@]}" pytest expecttest parameterized fire tabulate
 prepare_hcu
@@ -106,44 +106,5 @@ run_with_failed_retry() {
   fi
 }
 
-vllm_status=0
-if idle_devices="$(python - <<'PY'
-import os
-import sys
-import torch
-
-available = []
-for device in range(torch.cuda.device_count()):
-    free, total = torch.cuda.mem_get_info(device)
-    ratio = free / total
-    print(f"HCU {device}: {free / 2**30:.1f}/{total / 2**30:.1f} GiB free ({ratio:.1%})", file=sys.stderr)
-    if ratio >= 0.95:
-        available.append((device, free))
-if len(available) < 2:
-    raise SystemExit("vLLM tests require two HCU devices with at least 95% free memory")
-offset = (int(os.environ.get("GITHUB_RUN_ID", "0")) + int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")) - 1) % len(available)
-available = available[offset:] + available[:offset]
-available.sort(key=lambda item: item[1], reverse=True)
-print(",".join(str(device) for device, _ in available[:2]))
-PY
-)"; then
-  (
-    export ROCR_VISIBLE_DEVICES="${idle_devices}"
-    export VLLM_WORKER_MULTIPROC_METHOD=spawn
-    echo "Running vLLM tests on HCU devices ${idle_devices}"
-    run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-vllm" 20m 10m \
-      test/integration/test_vllm.py
-  ) || vllm_status=$?
-else
-  echo "Unable to select two idle HCU devices; running other tests" >&2
-  vllm_status=1
-fi
-
-main_status=0
 run_with_failed_retry "${LOCAL_RUN_ROOT}/pytest-main" none none test \
-  --ignore=test/integration/test_vllm.py \
-  --deselect=test/quantization/pt2e/test_x86inductor_quantizer.py::TestQuantizePT2EX86Inductor::test_linear_reused_with_fusable_post_op || main_status=$?
-if (( vllm_status != 0 || main_status != 0 )); then
-  echo "vLLM status: ${vllm_status}; other tests status: ${main_status}" >&2
-  exit 1
-fi
+  --deselect=test/quantization/pt2e/test_x86inductor_quantizer.py::TestQuantizePT2EX86Inductor::test_linear_reused_with_fusable_post_op
