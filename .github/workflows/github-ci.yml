@@ -92,7 +92,7 @@ jobs:
          github.event_name == 'workflow_dispatch')
       }}
     runs-on: bw1100
-    timeout-minutes: 720
+    timeout-minutes: 7200
     concurrency:
       group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
@@ -134,7 +134,7 @@ jobs:
           git submodule update --init --force --recursive
       - name: Build wheel
         run: bash .github/scripts/build-hcu-wheel.sh
-      - name: Test wheel
+      - name: Test HCU wheel
         if: github.event_name == 'pull_request_target'
         run: bash .github/scripts/test-hcu.sh
       - name: Repair and upload wheel
