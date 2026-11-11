@@ -14,6 +14,10 @@ permissions:
   pull-requests: read
   checks: read
 
+concurrency:
+  group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     shell: bash
@@ -77,7 +81,7 @@ jobs:
             core.setOutput("authorized", "true");
 
   build:
-    name: Build, test, and publish HCU wheel (${{ matrix.dtk }})
+    name: Build HCU wheel (DTK ${{ matrix.dtk }})
     needs: authorize-pr
     if: >-
       ${{
@@ -89,8 +93,8 @@ jobs:
           github.repository == 'HYGON-AI/ao-das') ||
          github.event_name == 'workflow_dispatch')
       }}
-    runs-on: bw1100
-    timeout-minutes: 7200
+    runs-on: hygon-build
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -110,17 +114,9 @@ jobs:
       PIP_INDEX_PATH: ${{ matrix.index }}
       TORCH_VERSION: ${{ matrix.torch }}
       DTK_PKG_NAME: ${{ matrix.pkg }}
-      LOCAL_RUN_ROOT: /tmp/ao-das/${{ github.run_id }}/${{ github.run_attempt }}/${{ matrix.dtk }}
-    concurrency:
-      group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}-${{ matrix.dtk }}
-      cancel-in-progress: true
+      LOCAL_RUN_ROOT: /ci_public/ao-das/${{ github.run_id }}/${{ github.run_attempt }}/${{ matrix.dtk }}
     container:
       image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:${{ matrix.image }}
-      volumes:
-        - /opt/hyhal:/opt/hyhal:ro
-      options: >-
-        --device=/dev/kfd --device=/dev/dri
-        --group-add=video --shm-size=80G --privileged
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -152,9 +148,6 @@ jobs:
           git submodule update --init --force --recursive
       - name: Build wheel
         run: bash .github/scripts/build-hcu-wheel.sh
-      - name: Test HCU wheel
-        if: github.event_name == 'pull_request_target'
-        run: bash .github/scripts/test-hcu.sh
       - name: Repair and upload wheel
         if: >-
           github.event_name == 'push' &&
@@ -178,3 +171,74 @@ jobs:
             --dtk_pkg_name "${DTK_PKG_NAME}" \
             --record --repo "${GITHUB_WORKSPACE}" \
             -f "${LOCAL_RUN_ROOT}"/output/*.whl
+
+  test:
+    name: Test HCU wheel (DTK ${{ matrix.dtk }}, 1 card)
+    needs: build
+    if: >-
+      ${{
+        github.event_name == 'pull_request_target' &&
+        needs.build.result == 'success'
+      }}
+    runs-on: hygon-bw1100-1card
+    timeout-minutes: 7200
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dtk: '2604'
+            image: 26.04-ubuntu22.04-py3.10
+            index: nightly/dtk2604
+            torch: 2.11.0
+          - dtk: '2610'
+            image: 26.10-ubuntu22.04-py3.12
+            index: das_nightly/dtk2610
+            torch: 2.11.0
+    env:
+      DTK_VERSION: ${{ matrix.dtk }}
+      PIP_INDEX_PATH: ${{ matrix.index }}
+      TORCH_VERSION: ${{ matrix.torch }}
+      WHEEL_ROOT: /ci_public/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
+      LOCAL_RUN_ROOT: /tmp/ao-das/${{ github.run_id }}/${{ github.run_attempt }}/${{ matrix.dtk }}
+    container:
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:${{ matrix.image }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Configure Git safe directories
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory \
+            "${GITHUB_WORKSPACE}/third_party/cutlass"
+      - name: Merge PR into target branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          auth="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic ${auth}" \
+            fetch --no-tags origin "pull/${PR_NUMBER}/head"
+          test "$(git rev-parse FETCH_HEAD)" = "${PR_HEAD_SHA}"
+          git -c user.name=github-actions -c user.email=ci@github \
+            merge --no-ff --no-edit "${PR_HEAD_SHA}"
+      - name: Initialize submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive
+      - name: Copy wheel from shared storage
+        run: |
+          mkdir -p "${LOCAL_RUN_ROOT}/dist"
+          shopt -s nullglob
+          wheels=("${WHEEL_ROOT}/${DTK_VERSION}/dist/"*.whl)
+          (( ${#wheels[@]} == 1 )) || {
+            echo "Expected one DTK ${DTK_VERSION} wheel, found ${#wheels[@]}" >&2
+            exit 1
+          }
+          cp -a -- "${wheels[0]}" "${LOCAL_RUN_ROOT}/dist/"
+      - name: Test HCU wheel
+        run: bash .github/scripts/test-hcu.sh
