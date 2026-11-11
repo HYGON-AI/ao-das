@@ -22,8 +22,6 @@ env:
   ROCM_PATH: /opt/dtk
   PYPI_URL: ${{ vars.PYPI_URL }}
   RESOURCE_SERVER_URL: ${{ vars.RESOURCE_SERVER_URL }}
-  TORCH_VERSION: 2.11.0
-  LOCAL_RUN_ROOT: /tmp/ao-das/${{ github.run_id }}/${{ github.run_attempt }}
 
 jobs:
   authorize-pr:
@@ -79,7 +77,7 @@ jobs:
             core.setOutput("authorized", "true");
 
   build:
-    name: Build, test, and publish HCU wheel
+    name: Build, test, and publish HCU wheel (${{ matrix.dtk }})
     needs: authorize-pr
     if: >-
       ${{
@@ -93,11 +91,31 @@ jobs:
       }}
     runs-on: bw1100
     timeout-minutes: 7200
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dtk: '2604'
+            image: 26.04-ubuntu22.04-py3.10
+            index: nightly/dtk2604
+            torch: 2.11.0
+            pkg: DTK-26.04-rc4-centos8-x86_64.tar.gz
+          - dtk: '2610'
+            image: 26.10-ubuntu22.04-py3.12
+            index: das_nightly/dtk2610
+            torch: 2.11.0
+            pkg: DTK-26.10-CentOS8.5-x86_64.tar.gz
+    env:
+      DTK_VERSION: ${{ matrix.dtk }}
+      PIP_INDEX_PATH: ${{ matrix.index }}
+      TORCH_VERSION: ${{ matrix.torch }}
+      DTK_PKG_NAME: ${{ matrix.pkg }}
+      LOCAL_RUN_ROOT: /tmp/ao-das/${{ github.run_id }}/${{ github.run_attempt }}/${{ matrix.dtk }}
     concurrency:
-      group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
+      group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}-${{ matrix.dtk }}
       cancel-in-progress: true
     container:
-      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:26.04-ubuntu22.04-py3.10
+      image: ${{ vars.HARBOR_SITE }}/hcu/base/dtk:${{ matrix.image }}
       volumes:
         - /opt/hyhal:/opt/hyhal:ro
       options: >-
@@ -144,7 +162,6 @@ jobs:
           github.ref == 'refs/heads/v0.18.0-dev'
         env:
           PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
-          DTK_PKG_NAME: DTK-26.04-rc4-centos8-x86_64.tar.gz
         run: |
           source .github/scripts/build-hcu-wheel.sh
           pip_install CIUpload
