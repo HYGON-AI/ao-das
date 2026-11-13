@@ -6,13 +6,11 @@ on:
     branches: [v0.18.0-dev]
   pull_request_target:
     branches: [v0.18.0-dev]
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: read
-  checks: read
 
 concurrency:
   group: torchao-hcu-${{ github.event.pull_request.number || github.ref }}
@@ -28,67 +26,11 @@ env:
   RESOURCE_SERVER_URL: ${{ vars.RESOURCE_SERVER_URL }}
 
 jobs:
-  authorize-pr:
-    name: Check PR Labels
-    if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      authorized: ${{ steps.authorization.outputs.authorized }}
-    steps:
-      - name: Verify ready-hcu authorization
-        id: authorization
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
-        with:
-          script: |
-            const label = "ready-hcu";
-            const action = context.payload.action;
-            const pullRequest = context.payload.pull_request;
-            const labels = pullRequest.labels.map(item => item.name);
-            const resetActions = new Set(["opened", "reopened", "ready_for_review"]);
-            core.setOutput("authorized", "false");
-
-            if (resetActions.has(action)) {
-              core.notice(`HCU CI is locked. Apply the ${label} label to run it.`);
-              return;
-            }
-
-            if (action === "synchronize") {
-              if (labels.includes(label)) {
-                core.setOutput("authorized", "true");
-              } else {
-                core.notice(`HCU CI is locked. Apply the ${label} label to run it.`);
-              }
-              return;
-            }
-
-            if (action !== "labeled" || context.payload.label?.name !== label) {
-              return;
-            }
-
-            const response = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              username: context.actor,
-            });
-            const permission = response.data.permission;
-            if (!new Set(["write", "maintain", "admin"]).has(permission)) {
-              core.setFailed(`${context.actor} cannot authorize HCU CI.`);
-              return;
-            }
-
-            core.setOutput("authorized", "true");
-
   build:
     name: Build HCU wheel (DTK ${{ matrix.dtk }})
-    needs: authorize-pr
     if: >-
       ${{
-        always() &&
-        ((github.event_name == 'pull_request_target' &&
-          needs.authorize-pr.result == 'success' &&
-          needs.authorize-pr.outputs.authorized == 'true') ||
+        (github.event_name == 'pull_request_target' ||
          (github.event_name == 'push' &&
           github.repository == 'HYGON-AI/ao-das') ||
          github.event_name == 'workflow_dispatch')
@@ -101,7 +43,7 @@ jobs:
         include:
           - dtk: '2604'
             image: 26.04-ubuntu22.04-py3.10
-            index: nightly/dtk2604
+            index: das_nightly/dtk2604-rc4
             torch: 2.11.0
             pkg: DTK-26.04-rc4-centos8-x86_64.tar.gz
           - dtk: '2610'
@@ -188,7 +130,7 @@ jobs:
         include:
           - dtk: '2604'
             image: 26.04-ubuntu22.04-py3.10
-            index: nightly/dtk2604
+            index: das_nightly/dtk2604-rc4
             torch: 2.11.0
           - dtk: '2610'
             image: 26.10-ubuntu22.04-py3.12

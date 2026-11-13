@@ -1,6 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${DTK_VERSION:-}" ]]; then
+  dtk_version_file="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
+  case "${dtk_version_file}" in
+    2604*) DTK_VERSION=2604 ;;
+    2610*) DTK_VERSION=2610 ;;
+    *) echo "Unsupported DTK version: ${dtk_version_file}" >&2; exit 1 ;;
+  esac
+fi
+if [[ -z "${PIP_INDEX_PATH:-}" ]]; then
+  case "${DTK_VERSION}" in
+    2604) PIP_INDEX_PATH=das_nightly/dtk2604-rc4 ;;
+    2610) PIP_INDEX_PATH=das_nightly/dtk2610 ;;
+    *) echo "Unsupported DTK version: ${DTK_VERSION}" >&2; exit 1 ;;
+  esac
+fi
+export DTK_VERSION PIP_INDEX_PATH
+
 pip_install() {
   : "${PYPI_URL:?PYPI_URL repository variable is required}"
   local index_url="${PYPI_URL%/}/nightly/dtk2604/+simple/"
@@ -27,7 +44,7 @@ prepare_hcu() {
 
 build_hcu_wheel() {
   local torch_package="torch==${TORCH_VERSION}"
-  if [[ "${DTK_VERSION}" == 2610 ]]; then
+  if [[ "${PIP_INDEX_PATH}" == das_nightly/* ]]; then
     torch_package="$(python - <<'PY'
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -55,10 +72,11 @@ for href in parser.hrefs:
     if not filename.endswith(".whl"):
         continue
     name, version, _, tags = parse_wheel_filename(filename)
-    if name == "torch" and str(version).startswith(os.environ["TORCH_VERSION"] + "+dtk2610.") and tags & supported:
+    dtk_tag = "dtk" + os.environ["DTK_VERSION"] + "."
+    if name == "torch" and str(version).startswith(os.environ["TORCH_VERSION"] + "+" + dtk_tag) and tags & supported:
         candidates.append((version, url))
 if not candidates:
-    raise SystemExit(f"No compatible torch wheel in {index}")
+    raise SystemExit(f"No compatible torch wheel for {dtk_tag} in {index}")
 print(max(candidates)[1])
 PY
 )"
