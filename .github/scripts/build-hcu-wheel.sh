@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${DTK_VERSION:-}" ]]; then
-  dtk_version_file="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
-  case "${dtk_version_file}" in
-    *2604*) DTK_VERSION=2604 ;;
-    *2610*) DTK_VERSION=2610 ;;
-    *) echo "Unsupported DTK version: ${dtk_version_file}" >&2; exit 1 ;;
-  esac
+dtk_version_value="${DTK_VERSION:-}"
+if [[ -z "${dtk_version_value}" ]]; then
+  dtk_version_value="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
 fi
+case "${dtk_version_value}" in
+  *2604*) DTK_VERSION=2604 ;;
+  *2610*) DTK_VERSION=2610 ;;
+  *) echo "Unsupported DTK version: ${dtk_version_value}" >&2; exit 1 ;;
+esac
 if [[ -z "${PIP_INDEX_PATH:-}" ]]; then
   case "${DTK_VERSION}" in
     2604) PIP_INDEX_PATH=das_nightly/dtk2604-rc4 ;;
