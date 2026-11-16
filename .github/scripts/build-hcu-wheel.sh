@@ -4,8 +4,8 @@ set -euo pipefail
 if [[ -z "${DTK_VERSION:-}" ]]; then
   dtk_version_file="$(tr -d '.[:space:]' < /opt/dtk/.info/rocm_version)"
   case "${dtk_version_file}" in
-    2604*) DTK_VERSION=2604 ;;
-    2610*) DTK_VERSION=2610 ;;
+    *2604*) DTK_VERSION=2604 ;;
+    *2610*) DTK_VERSION=2610 ;;
     *) echo "Unsupported DTK version: ${dtk_version_file}" >&2; exit 1 ;;
   esac
 fi
@@ -65,6 +65,7 @@ index = os.environ["PYPI_URL"].rstrip("/") + "/" + os.environ["PIP_INDEX_PATH"] 
 parser = Links()
 parser.feed(urlopen(index, timeout=30).read().decode())
 supported = set(sys_tags())
+dtk_tag = "dtk" + os.environ["DTK_VERSION"] + "."
 candidates = []
 for href in parser.hrefs:
     url = urljoin(index, href)
@@ -72,7 +73,6 @@ for href in parser.hrefs:
     if not filename.endswith(".whl"):
         continue
     name, version, _, tags = parse_wheel_filename(filename)
-    dtk_tag = "dtk" + os.environ["DTK_VERSION"] + "."
     if name == "torch" and str(version).startswith(os.environ["TORCH_VERSION"] + "+" + dtk_tag) and tags & supported:
         candidates.append((version, url))
 if not candidates:
