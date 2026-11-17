@@ -88,8 +88,68 @@ PY
   fi
   source /opt/dtk/env.sh
   : "${LOCAL_RUN_ROOT:?LOCAL_RUN_ROOT is required}"
-  mkdir -p "${LOCAL_RUN_ROOT}/dist"
-  python setup.py bdist_wheel --dist-dir "${LOCAL_RUN_ROOT}/dist"
+  local raw_wheel_dir="${LOCAL_RUN_ROOT}/raw-dist"
+  local wheel_dir="${LOCAL_RUN_ROOT}/dist"
+  mkdir -p "${raw_wheel_dir}" "${wheel_dir}"
+  python setup.py bdist_wheel --dist-dir "${raw_wheel_dir}"
+  build_manylinux_wheel "${raw_wheel_dir}" "${wheel_dir}"
+}
+
+build_manylinux_wheel() {
+  local raw_wheel_dir="$1"
+  local wheel_dir="$2"
+  local glibc_version platform
+  local -a wheels excludes auditwheel_excludes
+
+  pip_install auditwheel patchelf
+
+  shopt -s nullglob
+  wheels=("${raw_wheel_dir}"/*-linux_x86_64.whl)
+  shopt -u nullglob
+  (( ${#wheels[@]} == 1 )) || {
+    echo "Expected one Linux wheel in ${raw_wheel_dir}, found ${#wheels[@]}" >&2
+    exit 1
+  }
+
+  glibc_version="$(getconf GNU_LIBC_VERSION 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' || true)"
+  [[ -n "${glibc_version}" ]] || {
+    echo "Unable to determine the glibc version for the manylinux tag" >&2
+    exit 1
+  }
+  platform="manylinux_${glibc_version/./_}_x86_64"
+
+  # torchao._C is loaded into a DTK-enabled PyTorch process.  Do not bundle
+  # DTK or PyTorch runtime libraries: they must match the installed torch/DTK.
+  excludes=(
+    'libgalaxyhip.so*' 'libMIOpen.so*' 'librccl.so*'
+    'libhipblas.so*' 'libhipblaslt.so*' 'libhipfft.so*' 'libhiprand.so*'
+    'libhiprtc.so*' 'libhipsolver.so*' 'libhipsparse.so*' 'libhipnn.so*'
+    'librocblas.so*' 'librocsolver.so*' 'librocfft.so*' 'librocrand.so*'
+    'librocsparse.so*' 'librocm_smi64.so*' 'librocfft-device-*.so*'
+    'libhsa-runtime64.so*' 'libamdhip64.so*' 'libamd_comgr.so*' 'libhsakmt.so*'
+    'libc10.so*' 'libc10_hip.so*' 'libtorch_cpu.so*' 'libtorch_hip.so*'
+    'libtorch_python.so*' 'libtorch.so*'
+  )
+  for library in "${excludes[@]}"; do
+    auditwheel_excludes+=(--exclude "${library}")
+  done
+
+  echo "========== Inspecting ${wheels[0]} for ${platform} =========="
+  auditwheel show "${wheels[0]}"
+  echo "========== Generating manylinux wheel (${platform}) =========="
+  auditwheel repair --plat "${platform}" \
+    "${auditwheel_excludes[@]}" \
+    --wheel-dir "${wheel_dir}" \
+    "${wheels[0]}"
+
+  shopt -s nullglob
+  wheels=("${wheel_dir}"/*manylinux*.whl)
+  shopt -u nullglob
+  (( ${#wheels[@]} == 1 )) || {
+    echo "Expected one repaired manylinux wheel in ${wheel_dir}, found ${#wheels[@]}" >&2
+    exit 1
+  }
+  echo "Generated manylinux wheel: ${wheels[0]}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
