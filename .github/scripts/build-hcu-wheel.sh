@@ -8,12 +8,14 @@ fi
 case "${dtk_version_value}" in
   *2604*) DTK_VERSION=2604 ;;
   *2610*) DTK_VERSION=2610 ;;
+  *2704*) DTK_VERSION=2704 ;;
   *) echo "Unsupported DTK version: ${dtk_version_value}" >&2; exit 1 ;;
 esac
 if [[ -z "${PIP_INDEX_PATH:-}" ]]; then
   case "${DTK_VERSION}" in
     2604) PIP_INDEX_PATH=das_nightly/dtk2604-rc4 ;;
     2610) PIP_INDEX_PATH=das_nightly/dtk2610 ;;
+    2704) PIP_INDEX_PATH=nightly/dtk2704 ;;
     *) echo "Unsupported DTK version: ${DTK_VERSION}" >&2; exit 1 ;;
   esac
 fi
@@ -21,7 +23,13 @@ export DTK_VERSION PIP_INDEX_PATH
 
 pip_install() {
   : "${PYPI_URL:?PYPI_URL repository variable is required}"
-  local index_url="${PYPI_URL%/}/nightly/dtk2604/+simple/"
+  local package_index="${PIP_INDEX_PATH:-nightly/dtk2604}"
+  # das_nightly only hosts DTK-specific wheels; common Python build/test
+  # dependencies remain in the nightly index for the matching base release.
+  if [[ "${package_index}" == das_nightly/* ]]; then
+    package_index=nightly/dtk2604
+  fi
+  local index_url="${PYPI_URL%/}/${package_index}/+simple/"
   local host="${PYPI_URL#*://}"
   host="${host%%/*}"
   host="${host%%:*}"
@@ -29,24 +37,8 @@ pip_install() {
     --trusted-host "${host}" "$@"
 }
 
-prepare_hcu() {
-  local work_dir hipblaslt_dir hipblaslt_lib
-  work_dir="$(mktemp -d)"
-  curl -fL -C - -o "${work_dir}/hipblastLlib.tar.gz" \
-    "https://ksefile.hpccube.com:65241/efile/s/d/c2NubXFneDI4ZQ==/06d7d4df13daa892"
-  tar -xzf "${work_dir}/hipblastLlib.tar.gz" -C "${work_dir}"
-  hipblaslt_dir="$(find "${work_dir}" -type d -name hipblaslt -print -quit)"
-  hipblaslt_lib="$(find "${work_dir}" -name libhipblaslt.so.0.10 -print -quit)"
-  rm -rf /opt/dtk/lib/hipblaslt
-  rm -f /opt/dtk/lib/libhipblaslt.so.0.10
-  cp -a "${hipblaslt_dir}" /opt/dtk/lib/hipblaslt
-  cp -a "${hipblaslt_lib}" /opt/dtk/lib/libhipblaslt.so.0.10
-}
-
-build_hcu_wheel() {
-  local torch_package="torch==${TORCH_VERSION}"
-  if [[ "${PIP_INDEX_PATH}" == das_nightly/* ]]; then
-    torch_package="$(python - <<'PY'
+resolve_torch_package() {
+  python - <<'PY'
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 from urllib.request import urlopen
@@ -80,8 +72,25 @@ if not candidates:
     raise SystemExit(f"No compatible torch wheel for {dtk_tag} in {index}")
 print(max(candidates)[1])
 PY
-)"
-  fi
+}
+
+prepare_hcu() {
+  local work_dir hipblaslt_dir hipblaslt_lib
+  work_dir="$(mktemp -d)"
+  curl -fL -C - -o "${work_dir}/hipblastLlib.tar.gz" \
+    "https://ksefile.hpccube.com:65241/efile/s/d/c2NubXFneDI4ZQ==/06d7d4df13daa892"
+  tar -xzf "${work_dir}/hipblastLlib.tar.gz" -C "${work_dir}"
+  hipblaslt_dir="$(find "${work_dir}" -type d -name hipblaslt -print -quit)"
+  hipblaslt_lib="$(find "${work_dir}" -name libhipblaslt.so.0.10 -print -quit)"
+  rm -rf /opt/dtk/lib/hipblaslt
+  rm -f /opt/dtk/lib/libhipblaslt.so.0.10
+  cp -a "${hipblaslt_dir}" /opt/dtk/lib/hipblaslt
+  cp -a "${hipblaslt_lib}" /opt/dtk/lib/libhipblaslt.so.0.10
+}
+
+build_hcu_wheel() {
+  local torch_package
+  torch_package="$(resolve_torch_package)"
   pip_install "${torch_package}" setuptools wheel
   if [[ "${DTK_VERSION}" == 2604 ]]; then
     prepare_hcu
