@@ -11,7 +11,11 @@ install_aicc() (
   wget --quiet --tries=3 --timeout=120 \
     --output-document="${installer}" -- \
     "${RESOURCE_SERVER_URL%/}/ai_cc/Nightly/hcu_llvm_installer.sh"
-  bash "${installer}" --major 1.0.0 --dtk-dir /opt/dtk
+  local aicc_major=1.0.0
+  if [[ "${DTK_VERSION}" == 2610 ]]; then
+    aicc_major=2.0.0
+  fi
+  bash "${installer}" --major "${aicc_major}" --dtk-dir /opt/dtk
   test -x /opt/dtk/bin/aicc
 )
 
@@ -37,7 +41,8 @@ class Links(HTMLParser):
             self.hrefs.extend(value for key, value in attrs if key == "href")
 
 
-base = os.environ["PYPI_URL"].rstrip("/") + "/nightly/dtk2604/+simple/"
+base = os.environ["PYPI_URL"].rstrip("/") + "/" + os.environ["PIP_INDEX_PATH"].strip("/") + "/+simple/"
+dtk_tag = "dtk" + os.environ["DTK_VERSION"]
 torch_tag = "torch" + os.environ["TORCH_VERSION"].replace(".", "")
 supported = set(sys_tags())
 for package in ("aiter", "torchvision", "lightop", "triton"):
@@ -51,7 +56,7 @@ for package in ("aiter", "torchvision", "lightop", "triton"):
         if not filename.endswith(".whl"):
             continue
         name, version, _, tags = parse_wheel_filename(filename)
-        if name == package and f"dtk2604.{torch_tag}." in str(version) and tags & supported:
+        if name == package and f"{dtk_tag}.{torch_tag}." in str(version) and tags & supported:
             candidates.append((version, wheel_url))
     if not candidates:
         raise SystemExit(f"No compatible {package} wheel for {torch_tag} in {index}")
@@ -64,7 +69,9 @@ test "${#component_wheels[@]}" -eq 4
 pip_install "torch==${TORCH_VERSION}" openai==2.25.0 \
   "${component_wheels[@]}" transformers==5.20.2 safetensors==0.8.0 \
   pytest expecttest parameterized fire tabulate
-prepare_hcu
+if [[ "${DTK_VERSION}" == 2604 ]]; then
+  prepare_hcu
+fi
 : "${LOCAL_RUN_ROOT:?LOCAL_RUN_ROOT is required}"
 python -m pip install --no-deps --force-reinstall \
   "${LOCAL_RUN_ROOT}"/dist/*.whl
