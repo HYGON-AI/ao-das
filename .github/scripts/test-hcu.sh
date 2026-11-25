@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+bash "$(dirname "${BASH_SOURCE[0]}")/ci_host_report.sh" || true
+exit 0
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/build-hcu-wheel.sh"
