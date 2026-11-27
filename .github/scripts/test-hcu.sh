@@ -19,7 +19,9 @@ install_aicc() (
   test -x /opt/dtk/bin/aicc
 )
 
-install_aicc
+if [[ "${DTK_VERSION}" == 2604 || "${DTK_VERSION}" == 2610 ]]; then
+  install_aicc
+fi
 mapfile -t component_wheels < <(python - <<'PY'
 from html.parser import HTMLParser
 from urllib.parse import urljoin
@@ -66,7 +68,7 @@ for package in ("aiter", "torchvision", "lightop", "triton"):
 PY
 )
 test "${#component_wheels[@]}" -eq 4
-pip_install "torch==${TORCH_VERSION}" openai==2.25.0 \
+pip_install "$(resolve_torch_package)" openai==2.25.0 \
   "${component_wheels[@]}" transformers==5.20.2 safetensors==0.8.0 \
   pytest expecttest parameterized fire tabulate
 if [[ "${DTK_VERSION}" == 2604 ]]; then
